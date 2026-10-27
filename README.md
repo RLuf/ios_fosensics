@@ -57,27 +57,31 @@
 ### 🪟 Instalador e Pacote para Windows 10/11 (x64)
 
 Na aba [**Releases**](https://github.com/RLuf/ios_fosensics/releases), cada versão disponibiliza:
-- **`iOS_Forensics_Setup_v1.1.0_x64.exe`**: Instalador completo (**Inno Setup**) assinado digitalmente com **Authenticode SHA-256**, incluindo:
-  - Executável nativo `ios_forensics.exe` (**PyInstaller**).
+
+- **`iOS_Forensics_Setup_v1.2.0_x64.exe`**: Instalador completo (**Inno Setup**) assinado digitalmente com **Authenticode SHA-256**, incluindo:
+  - Executável nativo otimizado `ios_forensics.exe` (**PyInstaller**, sem UPX para abertura instantânea e evitar heurísticas de antivírus).
   - Binários `libimobiledevice` + `usbmuxd` Win64 (`ideviceinfo.exe`, `idevicepair.exe`, `idevicediagnostics.exe`, `idevicesyslog.exe`, `idevicecrashreport.exe`, `afcclient.exe`, `usbmuxd.exe` e DLLs) em `bin/`.
-  - Script automatizado [`install_drivers.ps1`](packaging/windows/install_drivers.ps1) que instala os drivers USB Apple (`VID_05AC`) via `pnputil.exe`, inicia o `Apple Mobile Device Service` / `usbmuxd` e importa o certificado Authenticode.
-- **`iOS_Forensics_Portable_v1.1.0_x64.zip`**: Edição portátil pronta para uso em pen-drives de resposta a incidentes.
+  - Script automatizado com auto-elevação UAC [`install_drivers.ps1`](packaging/windows/install_drivers.ps1) que instala os drivers USB Apple (`VID_05AC`) via `pnputil.exe`, inicia o `Apple Mobile Device Service` (AMDS), gera logs persistentes em `%ProgramData%\iOS_Forensics\logs\` e importa o certificado Authenticode.
+- **`iOS_Forensics_Portable_v1.2.0_x64.zip`**: Edição portátil pronta para uso em pen-drives de resposta a incidentes.
 - **`RLuf_iOS_Forensics_CodeSign.cer`** & **`SHA256SUMS.txt`**: Certificado público de assinatura de código e manifesto de hashes SHA-256.
 
 ### 🚀 Execução Rápida (PT-BR)
 
 ```bash
 # No Windows (após instalar ou extrair o ZIP portátil):
-ios_forensics.exe
-ios_forensics.exe --cli-export
+ios_forensics.exe                 # Abertura imediata (<100ms) com workers assíncronos
+ios_forensics.exe --no-auto-collect # Abre a TUI sem disparar varredura imediata
+ios_forensics.exe --cli-export    # Exportação pericial em modo linha de comando
 
 # Via Python (Linux / Windows / macOS):
 pip install -r requirements.txt
 python3 ios_forensics_tui.py
+python3 ios_forensics_tui.py --no-auto-collect
 python3 ios_forensics_tui.py --cli-export
 ```
 
 ### 📚 Documentação Completa (PT-BR & EN)
+
 - 📖 **[Índice da Documentação (`docs/INDEX.md`)](docs/INDEX.md)**
 - 🧭 **[Guia de Uso e Operação Pericial (`docs/USAGE_GUIDE.md`)](docs/USAGE_GUIDE.md)**
 - 🔬 **[Arquitetura das 6 Camadas Forenses (`docs/FORENSIC_ARCHITECTURE.md`)](docs/FORENSIC_ARCHITECTURE.md)**
@@ -112,22 +116,26 @@ python3 ios_forensics_tui.py --cli-export
 ### 🪟 Windows 10/11 (x64) Installer, Drivers & Authenticode Signing
 
 Every GitHub [**Release**](https://github.com/RLuf/ios_fosensics/releases) ships with:
-- **`iOS_Forensics_Setup_v1.1.0_x64.exe`**: Signed **Inno Setup** installer bundling `ios_forensics.exe` (**PyInstaller**), native Win64 `libimobiledevice` + `usbmuxd` binaries (`bin/`), automated Apple USB Driver provisioning via `pnputil.exe` ([`install_drivers.ps1`](packaging/windows/install_drivers.ps1)), and **Authenticode SHA-256** code signing ([`sign_artifacts.ps1`](packaging/windows/sign_artifacts.ps1)).
-- **`iOS_Forensics_Portable_v1.1.0_x64.zip`**: Standalone portable bundle.
+
+- **`iOS_Forensics_Setup_v1.2.0_x64.exe`**: Signed **Inno Setup** installer bundling `ios_forensics.exe` (**PyInstaller**, UPX disabled for zero decompression latency), native Win64 `libimobiledevice` + `usbmuxd` binaries (`bin/`), automated Apple USB Driver provisioning with UAC auto-elevation and persistent logging via `pnputil.exe` ([`install_drivers.ps1`](packaging/windows/install_drivers.ps1)), and **Authenticode SHA-256** code signing ([`sign_artifacts.ps1`](packaging/windows/sign_artifacts.ps1)).
+- **`iOS_Forensics_Portable_v1.2.0_x64.zip`**: Standalone portable bundle.
 - **`RLuf_iOS_Forensics_CodeSign.cer`** & **`SHA256SUMS.txt`**: Public Authenticode certificate and SHA-256 checksums.
 
 ### 🚀 Quick Start (EN)
 
 ```bash
 # Windows (Installer or Portable ZIP):
-ios_forensics.exe
-ios_forensics.exe --cli-export
+ios_forensics.exe                 # Instant startup (<100ms) with async workers
+ios_forensics.exe --no-auto-collect # Open TUI without triggering an immediate scan
+ios_forensics.exe --cli-export    # Command-line forensic report and package export
 
 # Python (Linux / Windows / macOS):
 pip install -r requirements.txt
 python3 ios_forensics_tui.py
+python3 ios_forensics_tui.py --no-auto-collect
 python3 ios_forensics_tui.py --cli-export
 ```
 
 ### 🤖 AI Code Review & Audit Credits
+
 Audited and verified with automated workflows and multi-agent code review by **Jules** (`@jules` / `@google-labs-jules` — [PR #3](https://github.com/RLuf/ios_fosensics/pull/3)), **Codex** (`@codex`), and **Gemini** (`@gemini-code-assist`). See [`docs/AI_CODE_REVIEW.md`](docs/AI_CODE_REVIEW.md) for full details.

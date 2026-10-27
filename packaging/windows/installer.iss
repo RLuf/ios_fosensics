@@ -2,7 +2,7 @@
 ; Empacota: ios_forensics.exe + libimobiledevice/usbmuxd Win64 + Drivers USB + Certificado
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.2.0"
 #endif
 
 #define MyAppName "iOS Forensics TUI Suite"
@@ -38,7 +38,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "installdrivers"; Description: "Instalar/Reparar Drivers USB Apple (VID_05AC) e Serviço usbmuxd"; GroupDescription: "Drivers & Serviços Forenses:"
+Name: "installdrivers"; Description: "Instalar/Reparar Drivers USB Apple (VID_05AC) e Serviço Apple Mobile Device Service (AMDS)"; GroupDescription: "Drivers & Serviços Forenses:"
 Name: "trustcert"; Description: "Instalar Certificado de Assinatura Authenticode nos Editores Confiáveis"; GroupDescription: "Segurança:"
 
 [Files]
@@ -56,11 +56,11 @@ Source: "..\..\build\bundle\drivers\*"; DestDir: "{app}\drivers"; Flags: ignorev
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Inspeção Forense e Debug USB iOS (TUI)"
 Name: "{group}\Exportação Rápida CLI (Relatório JSON + Fotos + SQLite)"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--cli-export"
-Name: "{group}\Reparar Drivers USB Apple & usbmuxd"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\drivers\install_drivers.ps1"""
+Name: "{group}\Reparar Drivers USB Apple & Serviços (UAC)"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\drivers\install_drivers.ps1"""
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 ; Instala certificado e drivers automaticamente durante o setup se selecionado
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\drivers\install_drivers.ps1"" -Quiet"; StatusMsg: "Configurando drivers USB Apple e serviço usbmuxd..."; Flags: runhidden waituntilterminated; Tasks: installdrivers
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\drivers\install_drivers.ps1"" -Quiet"; StatusMsg: "Configurando drivers USB Apple e serviço Apple Mobile Device Service (AMDS)..."; Flags: runhidden waituntilterminated; Tasks: installdrivers
 ; Opção de abrir o TUI ao finalizar a instalação
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

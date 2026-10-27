@@ -7,6 +7,7 @@
 ## 📋 Ordem Obrigatória de Execução (Step-by-Step)
 
 ### Passo 1 — REGRA DE OURO: Backup Prévio em `archived/`
+
 1. **Criação e Ignoramento da Pasta `archived/`:**
    - Antes de modificar, refatorar, sobrescrever ou apagar qualquer arquivo do projeto, garanta que a pasta `archived/` exista na raiz do repositório e que a entrada `archived/` esteja presente no [`.gitignore`](.gitignore).
 2. **Backup Obrigatório Antes de Qualquer Alteração:**
@@ -16,17 +17,26 @@
 ---
 
 ### Passo 2 — Implementação, Qualidade de Código e Segurança Forense
+
 1. **Compatibilidade Multiplataforma (Windows x64, Linux, macOS):**
    - Utilize `run_cmd()` com `CREATE_NO_WINDOW` no Windows e trate explicitamente `subprocess.TimeoutExpired` e `(OSError, ValueError)`.
-2. **Integridade e Cadeia de Custódia Forense:**
+2. **Interface TUI Não-Bloqueante (Textual Async Workers):**
+   - A inicialização da aplicação TUI (`main()`) nunca deve executar chamadas síncronas de I/O de dispositivo antes do `app.run()`.
+   - Toda coleta, diagnóstico, pareamento ou download deve rodar em workers de thread em segundo plano (`@work(thread=True)`) com proteção de lock (`threading.Lock`), mantendo a interface 100% responsiva (sem congelamento ou lag).
+   - Quando nenhum dispositivo estiver conectado (`idevice_id -l` vazio), execute short-circuit para evitar dezenas de timeouts encadeados.
+3. **Provisionamento e Elevação de Drivers no Windows:**
+   - Scripts de instalação/reparo de drivers (`install_drivers.ps1`) devem conter auto-elevação administrativa obrigatória (`Start-Process powershell.exe -Verb RunAs`), gravação de log persistente em `%ProgramData%\iOS_Forensics\logs\` e evitar criar serviços NT incompatíveis via `sc.exe`.
+4. **Integridade e Cadeia de Custódia Forense:**
    - Escape identificadores SQLite (`safe_t = t.replace('"', '""')`) e mantenha a geração automática do manifesto `manifest_sha256.txt` em todas as exportações periciais.
-3. **Validação Local com Linter e Testes:**
-   - Execute `python -m ruff check ios_forensics_tui.py tests/` e `python -m pytest -v` antes de comitar.
+5. **Validação Local com Linter e Testes:**
+   - Execute `ruff check ios_forensics_tui.py tests/` e `pytest -v` antes de comitar.
 
 ---
 
 ### Passo 3 — Criação, Revisão e Atualização Completa da Documentação
+
 Sempre crie, revise, corrija e atualize todos os arquivos de documentação em conformidade com as modificações realizadas no projeto:
+
 1. **Arquivos na Raiz do Repositório:**
    - [`.gitignore`](.gitignore)
    - [`AGENTS.md`](AGENTS.md), [`AGENTES.md`](AGENTES.md) e [`GEMINI.md`](GEMINI.md)
@@ -43,7 +53,9 @@ Sempre crie, revise, corrija e atualize todos os arquivos de documentação em c
 ---
 
 ### Passo 4 — Bump de Versão e Geração de Nova Release / Workflow
+
 Sempre que a alteração envolver empacotamento, atualização de workflow CI/CD ou geração de uma nova Release (o que é o fluxo padrão após melhorias ou merges):
+
 1. **Realize o Bump de Versão (Version Bump) Sincronizado:**
    - Incrementar a versão semântica (`MAJOR.MINOR.PATCH`) em:
      - [`pyproject.toml`](pyproject.toml) (`version = "X.Y.Z"`)
