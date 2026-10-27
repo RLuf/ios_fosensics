@@ -35,8 +35,8 @@ jobs:
 
       - name: Run Ruff Linter & Pytest Suite
         run: |
-          ruff check ios_forensics_tui.py tests/
-          pytest -v
+          python -m ruff check ios_forensics_tui.py tests/
+          python -m pytest -v
 
       - name: Comment AI Review Invocation on Pull Request
         if: github.event_name == 'pull_request'

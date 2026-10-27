@@ -65,8 +65,10 @@ jobs:
       - name: Run Linter & Unit Tests
         shell: pwsh
         run: |
-          ruff check ios_forensics_tui.py tests/
-          pytest -v
+          python -m ruff check ios_forensics_tui.py tests/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Fetch libimobiledevice Win64 Binaries & Apple USB Driver Scripts
         shell: pwsh

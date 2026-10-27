@@ -31,6 +31,13 @@ ios_forensics = "ios_forensics_tui:main"
 [tool.setuptools]
 py-modules = ["ios_forensics_tui"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
 [tool.ruff]
-line-length = 140
+line-length = 160
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

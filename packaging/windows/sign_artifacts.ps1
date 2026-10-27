@@ -37,9 +37,12 @@ if ($env:WINDOWS_PFX_BASE64) {
 
     Export-PfxCertificate -Cert $Cert -FilePath $PfxPath -Password $SecurePwd | Out-Null
     Export-Certificate -Cert $Cert -FilePath $CerPath | Out-Null
-    # Instala na máquina atual do builder para que Get-AuthenticodeSignature valide a cadeia
-    Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
-    Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
+    try {
+        Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+        Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
+    } catch {
+        Write-Warning "Aviso ao importar certificado no LocalMachine: $_"
+    }
 }
 
 # Localiza signtool.exe no Windows SDK
@@ -50,21 +53,23 @@ $SignTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -
 
 foreach ($File in $TargetFiles) {
     if (-not (Test-Path $File)) {
-        Write-Warning "Arquivo não encontrado para assinatura: $File"
-        continue
+        throw "Arquivo não encontrado para assinatura: $File"
     }
     Write-Host "==> Assinando $File ..." -ForegroundColor Green
     if ($SignTool) {
         & $SignTool.FullName sign /f "$PfxPath" /p "$PfxPasswordPlain" /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 /d "iOS Forensics TUI Suite" "$File"
         if ($LASTEXITCODE -ne 0) {
-            # Fallback sem servidor de carimbo de tempo caso haja restrição de rede momentânea
             & $SignTool.FullName sign /f "$PfxPath" /p "$PfxPasswordPlain" /fd SHA256 /d "iOS Forensics TUI Suite" "$File"
         }
     } else {
         $LoadedCert = Get-PfxCertificate -FilePath $PfxPath -Password $SecurePwd
-        Set-AuthenticodeSignature -FilePath $File -Certificate $LoadedCert -HashAlgorithm SHA256 -TimestampServer "http://timestamp.digicert.com" | Out-Null
+        Set-AuthenticodeSignature -FilePath $File -Certificate $LoadedCert -HashAlgorithm SHA256 | Out-Null
     }
 
     $Sig = Get-AuthenticodeSignature -FilePath $File
-    Write-Host "    Status da assinatura ($($File | Split-Path -Leaf)): $($Sig.Status) | Signer: $($Sig.SignerCertificate.Subject)" -ForegroundColor Cyan
+    if (-not $Sig.SignerCertificate) {
+        throw "Assinatura falhou para $File"
+    }
+    Write-Host "    Assinado com sucesso ($($File | Split-Path -Leaf)): Status=$($Sig.Status) | Thumbprint=$($Sig.SignerCertificate.Thumbprint)" -ForegroundColor Cyan
 }
+$global:LASTEXITCODE = 0
