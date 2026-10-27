@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ios-forensics-tui"
+version = "1.0.0"
+description = "iOS Forensic & USB Debug TUI Suite (Lockdown, IORegistry, NVRAM, AFC, SQLite, EXIF, Crash Reports, Syslog)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "RLuf"}
+]
+dependencies = [
+    "rich>=13.7.0",
+    "textual>=0.70.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+    "pyinstaller>=6.0.0",
+]
+
+[project.scripts]
+ios-forensics = "ios_forensics_tui:main"
+ios_forensics = "ios_forensics_tui:main"
+
+[tool.setuptools]
+py-modules = ["ios_forensics_tui"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
