@@ -20,12 +20,16 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, ClassVar
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -39,8 +43,22 @@ from textual.widgets import (
     TabPane,
 )
 
+__version__ = "1.2.0"
+
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
+
+# Exceções esperadas durante a coleta (subprocessos, plists, SQLite, FS).
+# Usadas nos workers em background para que uma falha pontual nunca derrube a TUI.
+COLLECTION_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    subprocess.SubprocessError,
+    sqlite3.Error,
+    plistlib.InvalidFileException,
+)
 
 
 def configure_runtime_environment() -> None:
@@ -205,23 +223,58 @@ class IOSForensicCollector:
         self.data: dict[str, Any] = {}
         self.last_updated: str = "Nunca"
 
-    def collect_all(self, deep_afc: bool = True) -> dict[str, Any]:
+    def collect_all(self, deep_afc: bool = True, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+        """Executa a coleta completa.
+
+        - Se nenhum dispositivo for detectado (`idevice_id -l` vazio), as consultas dependentes do
+          iPhone (ideviceinfo, domínios, IORegistry, diagnósticos e AFC) são PULADAS, evitando
+          dezenas de timeouts encadeados (antes: 30s a 3min de bloqueio).
+        - Domínios Lockdown, IORegistry e diagnósticos são consultados em paralelo.
+        - `progress` (opcional) recebe mensagens de etapa para exibição na TUI.
+        """
+
+        def step(msg: str) -> None:
+            if progress is not None:
+                progress(msg)
+
         result: dict[str, Any] = {
             "timestamp": datetime.datetime.now().isoformat(),
             "host_os": f"{platform.system()} {platform.release()} ({platform.machine()})",
-            "usb": self.collect_usb_and_daemon(),
-            "pairing": self.collect_pairing_and_lockdown(),
-            "ideviceinfo": self.collect_ideviceinfo(),
-            "domains": self.collect_domains(),
+            "usb": {},
+            "pairing": {},
+            "device_connected": False,
+            "ideviceinfo": {},
+            "domains": {},
             "nvram_decoded": {},
-            "ioreg": self.collect_ioregistry(),
-            "diagnostics": self.collect_diagnostics(),
+            "ioreg": {},
+            "diagnostics": {},
             "afc": {},
-            "crashes": self.collect_crash_summary(),
+            "crashes": {},
         }
-        result["nvram_decoded"] = self.decode_nvram(result["ideviceinfo"])
-        if deep_afc:
-            result["afc"] = self.collect_afc_forensics()
+        step("Verificando barramento USB e serviço usbmuxd...")
+        result["usb"] = self.collect_usb_and_daemon()
+        step("Verificando pareamento Lockdown...")
+        result["pairing"] = self.collect_pairing_and_lockdown()
+        result["device_connected"] = bool(result["pairing"].get("connected_udids"))
+
+        if result["device_connected"]:
+            step("Lendo ideviceinfo...")
+            result["ideviceinfo"] = self.collect_ideviceinfo()
+            step("Consultando domínios Lockdown, IORegistry e diagnósticos (paralelo)...")
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix="ios-collect") as pool:
+                f_dom = pool.submit(self.collect_domains)
+                f_ior = pool.submit(self.collect_ioregistry)
+                f_diag = pool.submit(self.collect_diagnostics)
+                result["domains"] = f_dom.result()
+                result["ioreg"] = f_ior.result()
+                result["diagnostics"] = f_diag.result()
+            result["nvram_decoded"] = self.decode_nvram(result["ideviceinfo"])
+            if deep_afc:
+                step("Varredura AFC (DCIM, EXIF e SQLite)...")
+                result["afc"] = self.collect_afc_forensics()
+
+        step("Indexando crash reports locais...")
+        result["crashes"] = self.collect_crash_summary()
         self.data = result
         self.last_updated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return result
@@ -229,28 +282,23 @@ class IOSForensicCollector:
     def collect_usb_and_daemon(self) -> dict[str, Any]:
         info: dict[str, Any] = {}
         if IS_WINDOWS:
-            _, pnp_out, _ = run_cmd(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_05AC' -or $_.FriendlyName -match 'Apple|iPhone|iPad' } | Select-Object Status,Class,FriendlyName,InstanceId | Format-Table -AutoSize | Out-String -Width 200",
-                ],
-                timeout=8,
+            # Uma única instância do PowerShell (antes eram duas, ~2-4s de overhead cada).
+            ps_script = (
+                "$ErrorActionPreference='SilentlyContinue';"
+                "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_05AC' -or $_.FriendlyName -match 'Apple|iPhone|iPad' } "
+                "| Select-Object Status,Class,FriendlyName,InstanceId | Format-Table -AutoSize | Out-String -Width 200;"
+                "'@@SVC@@';"
+                "Get-Service -Name 'Apple Mobile Device Service','usbmuxd' "
+                "| Select-Object Name,Status,StartType | Format-Table -AutoSize | Out-String"
             )
-            lines = [l.strip() for l in pnp_out.decode("utf-8", errors="replace").splitlines() if l.strip()]
+            _, ps_out, _ = run_cmd(
+                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                timeout=12,
+            )
+            pnp_txt, _, svc_txt = ps_out.decode("utf-8", errors="replace").partition("@@SVC@@")
+            lines = [l.strip() for l in pnp_txt.splitlines() if l.strip()]
             info["lsusb_apple"] = lines or ["Nenhum dispositivo USB Apple (VID_05AC) detectado via PnP"]
-
-            _, svc_out, _ = run_cmd(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "Get-Service -Name 'Apple Mobile Device Service','usbmuxd' -ErrorAction SilentlyContinue | Select-Object Name,Status,StartType | Format-Table -AutoSize | Out-String",
-                ],
-                timeout=6,
-            )
-            info["usbmuxd_status"] = svc_out.decode("utf-8", errors="replace").strip() or "Serviço usbmuxd / Apple Mobile Device Service não registrado"
+            info["usbmuxd_status"] = svc_txt.strip() or "Serviço usbmuxd / Apple Mobile Device Service não registrado"
             info["dmesg_usb_events"] = lines[-15:]
             return info
 
@@ -280,9 +328,13 @@ class IOSForensicCollector:
         udids = [u.strip() for u in out.decode("utf-8", errors="replace").splitlines() if u.strip()]
         pinfo["connected_udids"] = udids
 
-        rc, vout, verr = run_cmd(["idevicepair", "validate"])
-        pinfo["validate_rc"] = rc
-        pinfo["validate_output"] = (vout + verr).decode("utf-8", errors="replace").strip()
+        if udids:
+            rc, vout, verr = run_cmd(["idevicepair", "validate"])
+            pinfo["validate_rc"] = rc
+            pinfo["validate_output"] = (vout + verr).decode("utf-8", errors="replace").strip()
+        else:
+            pinfo["validate_rc"] = -1
+            pinfo["validate_output"] = "Nenhum dispositivo detectado (idevice_id -l vazio)"
 
         lockdown_dir = get_lockdown_dir()
         pinfo["lockdown_dir"] = str(lockdown_dir)
@@ -667,13 +719,16 @@ class IOSForensicTUI(App):
         Binding("q", "quit", "Sair"),
     ]
 
-    def __init__(self, collector: IOSForensicCollector) -> None:
+    def __init__(self, collector: IOSForensicCollector, auto_collect: bool = True) -> None:
         super().__init__()
         self.collector = collector
+        self.auto_collect = auto_collect
+        # Garante que apenas UMA operação de I/O com o iPhone rode por vez.
+        self._busy = threading.Lock()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("Carregando dados do dispositivo...", id="top-status")
+        yield Static("⏳ Interface pronta. Iniciando coleta em segundo plano...", id="top-status")
         with Horizontal(id="action-bar"):
             yield Button("🔄 [R] Atualizar", id="btn-refresh", variant="primary")
             yield Button("🔑 [P] Re-Parear (Trust)", id="btn-pair", variant="warning")
@@ -696,7 +751,11 @@ class IOSForensicTUI(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.render_all_views()
+        # A TUI é exibida IMEDIATAMENTE; a coleta acontece em uma thread de background.
+        if self.collector.data:
+            self.render_all_views()
+        if self.auto_collect:
+            self.action_refresh_data()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
@@ -711,44 +770,141 @@ class IOSForensicTUI(App):
         elif bid == "btn-crashes":
             self.action_pull_crashes()
 
+    # ------------------------------------------------------------------
+    # Infraestrutura de tarefas em background (não bloqueia o event loop)
+    # ------------------------------------------------------------------
+    def _set_buttons_disabled(self, disabled: bool) -> None:
+        for btn in self.query("#action-bar Button").results(Button):
+            btn.disabled = disabled
+
+    def _begin_task(self, label: str) -> bool:
+        """Executado na thread da UI. Retorna False se já houver uma tarefa em andamento."""
+        if not self._busy.acquire(blocking=False):
+            self.notify("Aguarde: já existe uma operação em andamento com o dispositivo.", title="Ocupado", severity="warning")
+            return False
+        self._set_buttons_disabled(True)
+        self.sub_title = f"⏳ {label}"
+        return True
+
+    def _end_task(self) -> None:
+        self._set_buttons_disabled(False)
+        self.sub_title = self.SUB_TITLE
+        if self._busy.locked():
+            self._busy.release()
+
+    def _set_progress(self, msg: str) -> None:
+        self.sub_title = f"⏳ {msg}"
+        if not self.collector.data:
+            self.query_one("#top-status", Static).update(f"[bold yellow]⏳ {msg}[/bold yellow]\n[dim]A interface permanece responsiva durante a coleta.[/dim]")
+
+    def _progress_from_thread(self, msg: str) -> None:
+        self.call_from_thread(self._set_progress, msg)
+
+    def _report_error(self, title: str, exc: BaseException) -> None:
+        self.notify(f"{type(exc).__name__}: {exc}", title=title, severity="error", timeout=10)
+
+    # ------------------------------------------------------------------
+    # Ações (thread da UI) -> Workers (threads de background)
+    # ------------------------------------------------------------------
     def action_refresh_data(self) -> None:
-        self.notify("Coletando todos os dados do iPhone via USB...", title="Atualizando")
-        self.collector.collect_all(deep_afc=True)
+        if self._begin_task("Coletando dados do iPhone via USB..."):
+            self._refresh_worker(deep_afc=True, notify_msg="Coleta concluída!")
+
+    @work(thread=True, group="device-io")
+    def _refresh_worker(self, deep_afc: bool = True, notify_msg: str | None = None) -> None:
+        try:
+            self.collector.collect_all(deep_afc=deep_afc, progress=self._progress_from_thread)
+            self.call_from_thread(self._after_refresh, notify_msg)
+        except COLLECTION_ERRORS as exc:
+            self.call_from_thread(self._report_error, "Falha na coleta", exc)
+        finally:
+            self.call_from_thread(self._end_task)
+
+    def _after_refresh(self, notify_msg: str | None) -> None:
         self.render_all_views()
-        self.notify("Coleta concluída com sucesso!", title="Pronto")
+        if not self.collector.data.get("device_connected"):
+            self.notify(
+                "Nenhum iPhone/iPad detectado. Verifique cabo, toque em 'Confiar' no aparelho e o driver "
+                "Apple Mobile Device USB / serviço Apple Mobile Device Service.",
+                title="Dispositivo não encontrado",
+                severity="warning",
+                timeout=10,
+            )
+        elif notify_msg:
+            self.notify(notify_msg, title="Pronto")
 
     def action_re_pair(self) -> None:
-        self.notify("Executando idevicepair pair & validate...", title="Pareamento")
-        _, out1, err1 = run_cmd(["idevicepair", "pair"], timeout=6)
-        _, out2, err2 = run_cmd(["idevicepair", "validate"], timeout=6)
-        msg = (out1 + err1 + b"\n" + out2 + err2).decode("utf-8", errors="replace").strip()
-        self.collector.collect_all(deep_afc=False)
-        self.render_all_views()
-        self.notify(msg or "Pareamento verificado!", title="Resultado do Pair", timeout=6)
+        if self._begin_task("Executando idevicepair pair & validate..."):
+            self._re_pair_worker()
+
+    @work(thread=True, group="device-io")
+    def _re_pair_worker(self) -> None:
+        try:
+            _, out1, err1 = run_cmd(["idevicepair", "pair"], timeout=6)
+            _, out2, err2 = run_cmd(["idevicepair", "validate"], timeout=6)
+            msg = (out1 + err1 + b"\n" + out2 + err2).decode("utf-8", errors="replace").strip()
+            self.collector.collect_all(deep_afc=False, progress=self._progress_from_thread)
+            self.call_from_thread(self._after_refresh, None)
+            self.call_from_thread(self.notify, msg or "Pareamento verificado!", title="Resultado do Pair", timeout=6)
+        except COLLECTION_ERRORS as exc:
+            self.call_from_thread(self._report_error, "Falha no pareamento", exc)
+        finally:
+            self.call_from_thread(self._end_task)
 
     def action_export_package(self) -> None:
-        self.notify("Exportando pacote forense completo (JSON + Fotos + SQLite + Plists)...", title="Exportação")
-        out_dir = self.collector.export_full_forensic_package()
-        self.notify(f"Salvo em: {out_dir}", title="Exportação Concluída!", timeout=8)
+        if self._begin_task("Exportando pacote forense (JSON + Fotos + SQLite + Plists)..."):
+            self.notify("Exportando pacote forense completo em segundo plano...", title="Exportação")
+            self._export_worker()
+
+    @work(thread=True, group="device-io")
+    def _export_worker(self) -> None:
+        try:
+            out_dir = self.collector.export_full_forensic_package()
+            self.call_from_thread(self.notify, f"Salvo em: {out_dir}", title="Exportação Concluída!", timeout=8)
+        except COLLECTION_ERRORS as exc:
+            self.call_from_thread(self._report_error, "Falha na exportação", exc)
+        finally:
+            self.call_from_thread(self._end_task)
 
     def action_capture_syslog(self) -> None:
-        self.notify("Capturando 4 segundos de idevicesyslog ao vivo...", title="Syslog iOS")
-        _, out, err = run_cmd(["idevicesyslog"], timeout=4)
+        if self._begin_task("Capturando 4 segundos de idevicesyslog..."):
+            self._syslog_worker()
+
+    @work(thread=True, group="device-io")
+    def _syslog_worker(self) -> None:
+        try:
+            _, out, err = run_cmd(["idevicesyslog"], timeout=4)
+            lines = (out + err).decode("utf-8", errors="replace").splitlines()
+            self.call_from_thread(self._write_syslog, lines)
+        except COLLECTION_ERRORS as exc:
+            self.call_from_thread(self._report_error, "Falha no syslog", exc)
+        finally:
+            self.call_from_thread(self._end_task)
+
+    def _write_syslog(self, lines: list[str]) -> None:
         log_widget = self.query_one("#log-syslog", RichLog)
         log_widget.write("[bold cyan]=== AMOSTRA AO VIVO DO IDEVICESYSLOG (4s) ===[/bold cyan]")
-        lines = (out + err).decode("utf-8", errors="replace").splitlines()
         for line in lines[-60:]:
             log_widget.write(line)
         self.notify(f"{len(lines)} linhas capturadas na aba 6!", title="Syslog")
 
     def action_pull_crashes(self) -> None:
-        self.notify("Extraindo relatórios de crash via idevicecrashreport...", title="Crash Reports")
-        crash_dir = get_default_crash_dir()
-        crash_dir.mkdir(parents=True, exist_ok=True)
-        run_cmd(["idevicecrashreport", "-k", str(crash_dir)], timeout=10)
-        self.collector.data["crashes"] = self.collector.collect_crash_summary()
-        self.render_logs_tab()
-        self.notify("Crash reports atualizados na aba 6!", title="Crash Reports")
+        if self._begin_task("Extraindo relatórios de crash via idevicecrashreport..."):
+            self._crashes_worker()
+
+    @work(thread=True, group="device-io")
+    def _crashes_worker(self) -> None:
+        try:
+            crash_dir = get_default_crash_dir()
+            crash_dir.mkdir(parents=True, exist_ok=True)
+            run_cmd(["idevicecrashreport", "-k", str(crash_dir)], timeout=10)
+            self.collector.data["crashes"] = self.collector.collect_crash_summary()
+            self.call_from_thread(self.render_logs_tab)
+            self.call_from_thread(self.notify, "Crash reports atualizados na aba 6!", title="Crash Reports")
+        except COLLECTION_ERRORS as exc:
+            self.call_from_thread(self._report_error, "Falha ao extrair crashes", exc)
+        finally:
+            self.call_from_thread(self._end_task)
 
     def render_all_views(self) -> None:
         d = self.collector.data
@@ -767,8 +923,16 @@ class IOSForensicTUI(App):
         bat_pct = bat_dom.get("BatteryCurrentCapacity", "?")
 
         top = self.query_one("#top-status", Static)
+        no_device_banner = ""
+        if d and not d.get("device_connected", True):
+            no_device_banner = (
+                "[bold red]⚠ Nenhum iPhone/iPad detectado (idevice_id -l vazio).[/bold red] "
+                "[yellow]Conecte o cabo, desbloqueie e toque em 'Confiar'. Se persistir, execute "
+                "'Reparar Drivers USB Apple' no Menu Iniciar (requer Administrador).[/yellow]\n"
+            )
         top.update(
-            f"[bold cyan]📱 Dispositivo:[/bold cyan] [bold white]{model_desc}[/bold white] ({dev.get('ProductType', '?')} / {dev.get('HardwareModel', '?')})   "
+            no_device_banner
+            + f"[bold cyan]📱 Dispositivo:[/bold cyan] [bold white]{model_desc}[/bold white] ({dev.get('ProductType', '?')} / {dev.get('HardwareModel', '?')})   "
             f"[bold cyan]iOS:[/bold cyan] {ios_ver}   "
             f"[bold cyan]Serial:[/bold cyan] {serial}   "
             f"[bold cyan]Bateria:[/bold cyan] {bat_pct}%\n"
@@ -1120,7 +1284,12 @@ def print_cli_summary(collector: IOSForensicCollector) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="iOS Forensic & USB Debug TUI")
     parser.add_argument("--cli-export", action="store_true", help="Executa coleta completa, exporta arquivos e exibe resumo no terminal sem abrir a TUI")
-    parser.add_argument("--version", action="version", version="iOS Forensic & Debug TUI Suite v1.1.0")
+    parser.add_argument(
+        "--no-auto-collect",
+        action="store_true",
+        help="Abre a TUI sem iniciar a coleta automática (use [R] para coletar manualmente)",
+    )
+    parser.add_argument("--version", action="version", version=f"iOS Forensic & Debug TUI Suite v{__version__}")
     args = parser.parse_args()
 
     collector = IOSForensicCollector()
@@ -1128,8 +1297,8 @@ def main() -> None:
         print_cli_summary(collector)
         return
 
-    collector.collect_all(deep_afc=True)
-    app = IOSForensicTUI(collector)
+    # v1.2.0: a TUI abre imediatamente; a coleta roda em background (worker thread) após o mount.
+    app = IOSForensicTUI(collector, auto_collect=not args.no_auto_collect)
     app.run()
 
 

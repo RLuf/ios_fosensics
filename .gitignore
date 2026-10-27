@@ -15,3 +15,5 @@ forensics_iphone_*/
 *.p12
 *.key
 archived/
+bin/
+uv.lock

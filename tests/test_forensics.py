@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from ios_forensics_tui import (
     IOSForensicCollector,
+    IOSForensicTUI,
+    __version__,
     configure_runtime_environment,
     decode_apple_serial_date,
     get_default_crash_dir,
@@ -180,3 +182,34 @@ def test_print_cli_summary() -> None:
         "afc": {"dcim_files": [], "sqlite_summary": {}},
     }), patch.object(collector, "export_full_forensic_package", return_value="/tmp/test_export"):
         print_cli_summary(collector)
+
+
+def test_version_1_2_0() -> None:
+    assert __version__ == "1.2.0"
+
+
+def test_collect_all_no_device_short_circuit() -> None:
+    collector = IOSForensicCollector()
+    with patch.object(collector, "collect_usb_and_daemon", return_value={"lsusb_apple": []}), \
+         patch.object(collector, "collect_pairing_and_lockdown", return_value={"connected_udids": []}), \
+         patch.object(collector, "collect_ideviceinfo") as mock_ideviceinfo, \
+         patch.object(collector, "collect_domains") as mock_domains, \
+         patch.object(collector, "collect_ioregistry") as mock_ioreg, \
+         patch.object(collector, "collect_afc_forensics") as mock_afc, \
+         patch.object(collector, "collect_crash_summary", return_value={"count": 0, "files": []}):
+
+        data = collector.collect_all(deep_afc=True)
+        assert data["device_connected"] is False
+        mock_ideviceinfo.assert_not_called()
+        mock_domains.assert_not_called()
+        mock_ioreg.assert_not_called()
+        mock_afc.assert_not_called()
+
+
+def test_tui_app_initialization_async() -> None:
+    collector = IOSForensicCollector()
+    app = IOSForensicTUI(collector, auto_collect=False)
+    assert app.collector is collector
+    assert app.auto_collect is False
+    assert hasattr(app, "_busy")
+    assert not app._busy.locked()
