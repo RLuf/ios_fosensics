@@ -1,38 +1,42 @@
-# 🤖 AGENTES.md — Diretrizes e Regras de Ouro do Projeto (PT-BR / EN)
+# 🤖 AGENTES.md — Diretrizes e Regras de Execução para Agentes de IA (PT-BR / EN)
 
-> Este documento é o espelho oficial em Português de [`AGENTS.md`](AGENTS.md). Todas as ferramentas e agentes autônomos (`@jules`, `@codex`, `@gemini-code-assist`, Antigravity, Cursor, Claude Code) que operam neste repositório devem seguir estritamente as regras abaixo.
-
----
-
-## 🏆 1. REGRA DE OURO — Backup Obrigatório em `archived/`
-
-1. **Backup antes de qualquer modificação ou exclusão:**
-   - Sempre crie a pasta `archived/` na raiz do projeto e certifique-se de que `archived/` está declarada no [`.gitignore`](.gitignore).
-   - **Antes de editar, sobrescrever ou apagar qualquer arquivo**, faça uma cópia ou mova o arquivo original para `archived/<timestamp>_<nome_arquivo>`.
-2. **Isolamento do Git:**
-   - A pasta `archived/` nunca deve ser enviada ao controle de versão remoto, servindo como cofre local de recuperação imediata.
+> Espelho oficial em Português de [`AGENTS.md`](AGENTS.md) e [`GEMINI.md`](GEMINI.md). Todas as regras abaixo devem ser seguidas rigorosamente na ordem de execução definida.
 
 ---
 
-## 📝 2. Manutenção Contínua de Documentação
+## 📋 Ordem Obrigatória de Execução (Passo a Passo)
 
-Qualquer evolução no código-fonte ([`ios_forensics_tui.py`](ios_forensics_tui.py)), nos scripts de empacotamento Windows ([`packaging/windows/`](packaging/windows/)) ou nos workflows ([`.github/workflows/`](.github/workflows/)) exige a revisão e atualização simultânea de:
-
-1. [`.gitignore`](.gitignore)
-2. [`AGENTS.md`](AGENTS.md) e [`AGENTES.md`](AGENTES.md)
-3. [`CHANGELOG.md`](CHANGELOG.md)
-4. [`README.md`](README.md) (Bilíngue PT-BR / EN, com prints atualizados da TUI em `docs/assets/`)
-5. Toda a árvore [`./docs/`](docs/INDEX.md):
-   - [`docs/INDEX.md`](docs/INDEX.md)
-   - [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md)
-   - [`docs/FORENSIC_ARCHITECTURE.md`](docs/FORENSIC_ARCHITECTURE.md)
-   - [`docs/WINDOWS_INSTALLER_AND_DRIVERS.md`](docs/WINDOWS_INSTALLER_AND_DRIVERS.md)
-   - [`docs/AI_CODE_REVIEW.md`](docs/AI_CODE_REVIEW.md)
+### Passo 1 — REGRA DE OURO: Backup Prévio em `archived/`
+1. **Criação e Ignoramento da Pasta `archived/`:**
+   - Antes de modificar, refatorar, sobrescrever ou apagar qualquer arquivo, crie a pasta `archived/` na raiz do projeto (caso ainda não exista) e certifique-se de que `archived/` esteja declarada no [`.gitignore`](.gitignore).
+2. **Backup Antes de Qualquer Edição ou Exclusão:**
+   - Copie ou mova o arquivo em questão para `archived/<YYYYMMDD_HHMMSS>_<nome_do_arquivo>` **antes** de aplicar qualquer modificação.
 
 ---
 
-## 🛡️ 3. Checklist de Qualidade e Auditoria Forense
+### Passo 2 — Implementação, Qualidade de Código e Segurança
+1. **Multiplataforma e Resiliência:**
+   - Manter compatibilidade total entre Windows 10/11 (x64), Linux e macOS.
+2. **Validação Automatizada:**
+   - Executar linter (`ruff check`) e suíte de testes unitários (`pytest -v`) garantindo zero erros.
 
-- **Zero Erros no Ruff & Pytest**: `python -m ruff check ios_forensics_tui.py tests/` e `python -m pytest -v` devem passar com 100% de êxito no Linux e no Windows.
-- **Integridade Probatória**: Verificar que `manifest_sha256.txt` (na exportação de perícia) e `SHA256SUMS.txt` (na Release do GitHub) são gerados corretamente.
-- **Conferência por IA**: Citar `@jules`, `@codex` e `@gemini-code-assist` nas revisões de código.
+---
+
+### Passo 3 — Criação, Revisão e Atualização Completa da Documentação
+Sempre crie, revise, corrija e atualize os arquivos de documentação em conformidade com as modificações realizadas:
+1. **Na Raiz do Repositório:**
+   - [`.gitignore`](.gitignore)
+   - [`AGENTS.md`](AGENTS.md), [`AGENTES.md`](AGENTES.md) e [`GEMINI.md`](GEMINI.md)
+   - [`CHANGELOG.md`](CHANGELOG.md) (Bilíngue PT-BR / EN)
+   - [`README.md`](README.md): Página inicial bilíngue (**Português e Inglês**), com prints/capturas de tela atualizados (`docs/assets/`) quando conveniente, além de guias técnicos e de uso.
+2. **Em [`./docs/`](docs/INDEX.md):**
+   - Revisar, corrigir e atualizar toda a documentação existente e criar o que faltar (`INDEX.md`, `USAGE_GUIDE.md`, `FORENSIC_ARCHITECTURE.md`, `WINDOWS_INSTALLER_AND_DRIVERS.md`, `AI_CODE_REVIEW.md`).
+
+---
+
+### Passo 4 — Bump de Versão e Geração de Nova Release / Workflow
+Sempre que a tarefa envolver geração de nova Release ou execução de workflow de empacotamento (fluxo padrão após correções e melhorias):
+1. **Fazer o Bump de Versão (Version Bump):**
+   - Atualizar a versão semântica (`X.Y.Z`) de forma consistente em [`pyproject.toml`](pyproject.toml), [`ios_forensics_tui.py`](ios_forensics_tui.py), [`packaging/windows/version_info.txt`](packaging/windows/version_info.txt), [`.github/workflows/windows-release.yml`](.github/workflows/windows-release.yml), [`CHANGELOG.md`](CHANGELOG.md) e [`README.md`](README.md).
+2. **Conferência no GitHub:**
+   - Verificar se o workflow do GitHub Actions concluiu com sucesso e se a nova Release foi publicada com todos os artefatos assinados e somas SHA-256.
