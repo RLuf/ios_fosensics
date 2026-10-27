@@ -9,6 +9,7 @@ Compatível com Linux, Windows (x64) e macOS.
 import argparse
 import base64
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -19,32 +20,23 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import threading
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
-
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.reactive import reactive
+from textual.containers import Horizontal
 from textual.widgets import (
     Button,
-    DataTable,
     Footer,
     Header,
-    Label,
-    Log,
     RichLog,
     Static,
     TabbedContent,
     TabPane,
-    Tree,
 )
 
 IS_WINDOWS = sys.platform == "win32"
@@ -53,7 +45,7 @@ IS_MACOS = sys.platform == "darwin"
 
 def configure_runtime_environment() -> None:
     """Adiciona diretórios de binários empacotados (Windows/PyInstaller/InnoSetup) ao PATH."""
-    candidate_dirs: List[Path] = []
+    candidate_dirs: list[Path] = []
     # Diretório interno do PyInstaller (_MEIPASS)
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
@@ -80,7 +72,7 @@ def configure_runtime_environment() -> None:
 
     current_path = os.environ.get("PATH", "")
     path_parts = current_path.split(os.pathsep) if current_path else []
-    prepended: List[str] = []
+    prepended: list[str] = []
     for d in candidate_dirs:
         d_str = str(d)
         if d.is_dir() and d_str not in path_parts and d_str not in prepended:
@@ -120,23 +112,22 @@ def get_default_export_base_dir() -> str:
     return str(Path.home())
 
 
-def run_cmd(cmd: List[str], timeout: int = 8) -> Tuple[int, bytes, bytes]:
-    kwargs: Dict[str, Any] = {
+def run_cmd(cmd: list[str], timeout: int = 8) -> tuple[int, bytes, bytes]:
+    kwargs: dict[str, Any] = {
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "timeout": timeout,
-        "check": False,
     }
     if IS_WINDOWS:
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     try:
-        proc = subprocess.run(cmd, **kwargs)
+        proc = subprocess.run(cmd, check=False, **kwargs)
         return proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout if isinstance(exc.stdout, bytes) else (exc.stdout.encode("utf-8", errors="replace") if exc.stdout else b"")
         err = exc.stderr if isinstance(exc.stderr, bytes) else (exc.stderr.encode("utf-8", errors="replace") if exc.stderr else b"Timeout expired")
         return 124, out, err
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         return 1, b"", str(exc).encode("utf-8", errors="replace")
 
 
@@ -189,9 +180,9 @@ def decode_apple_serial_date(serial: str) -> str:
     return "Formato proprietário"
 
 
-def parse_jpeg_exif_basic(data: bytes) -> Dict[str, Any]:
+def parse_jpeg_exif_basic(data: bytes) -> dict[str, Any]:
     """Extracts readable ASCII strings / dates / camera tags from JPEG header."""
-    info: Dict[str, Any] = {"size_bytes": len(data)}
+    info: dict[str, Any] = {"size_bytes": len(data)}
     head = data[:65536]
     dates = re.findall(rb"20\d{2}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}", head)
     if dates:
@@ -200,9 +191,8 @@ def parse_jpeg_exif_basic(data: bytes) -> Dict[str, Any]:
     interesting = []
     for m in ascii_matches:
         s = m.decode("ascii", errors="ignore").strip()
-        if any(k in s.lower() for k in ["apple", "iphone", "ios", "heic", "exif", "gps", "photoshop", "18.", "17.", "16."]):
-            if s not in interesting:
-                interesting.append(s)
+        if any(k in s.lower() for k in ["apple", "iphone", "ios", "heic", "exif", "gps", "photoshop", "18.", "17.", "16."]) and s not in interesting:
+            interesting.append(s)
     if interesting:
         info["header_strings"] = interesting[:12]
     return info
@@ -212,11 +202,11 @@ class IOSForensicCollector:
     """Coleta todos os dados possíveis do dispositivo iOS conectado via USB."""
 
     def __init__(self) -> None:
-        self.data: Dict[str, Any] = {}
+        self.data: dict[str, Any] = {}
         self.last_updated: str = "Nunca"
 
-    def collect_all(self, deep_afc: bool = True) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+    def collect_all(self, deep_afc: bool = True) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "timestamp": datetime.datetime.now().isoformat(),
             "host_os": f"{platform.system()} {platform.release()} ({platform.machine()})",
             "usb": self.collect_usb_and_daemon(),
@@ -236,8 +226,8 @@ class IOSForensicCollector:
         self.last_updated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return result
 
-    def collect_usb_and_daemon(self) -> Dict[str, Any]:
-        info: Dict[str, Any] = {}
+    def collect_usb_and_daemon(self) -> dict[str, Any]:
+        info: dict[str, Any] = {}
         if IS_WINDOWS:
             _, pnp_out, _ = run_cmd(
                 [
@@ -269,7 +259,6 @@ class IOSForensicCollector:
         info["lsusb_apple"] = lines
 
         # Verbose lsusb for 05ac
-        _, vout, _ = run_cmd(["lsusb", "-d", "05ac:"])
         if lines:
             _, vdesc, _ = run_cmd(["lsusb", "-v", "-d", "05ac:"], timeout=5)
             info["lsusb_verbose"] = vdesc.decode("utf-8", errors="replace")[:4000]
@@ -285,8 +274,8 @@ class IOSForensicCollector:
         info["dmesg_usb_events"] = dlines[-30:]
         return info
 
-    def collect_pairing_and_lockdown(self) -> Dict[str, Any]:
-        pinfo: Dict[str, Any] = {}
+    def collect_pairing_and_lockdown(self) -> dict[str, Any]:
+        pinfo: dict[str, Any] = {}
         _, out, _ = run_cmd(["idevice_id", "-l"])
         udids = [u.strip() for u in out.decode("utf-8", errors="replace").splitlines() if u.strip()]
         pinfo["connected_udids"] = udids
@@ -300,7 +289,7 @@ class IOSForensicCollector:
         records = []
         if lockdown_dir.exists():
             for p in sorted(lockdown_dir.glob("*.plist")):
-                rec: Dict[str, Any] = {
+                rec: dict[str, Any] = {
                     "filename": p.name,
                     "size": p.stat().st_size,
                     "mtime": datetime.datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
@@ -312,29 +301,29 @@ class IOSForensicCollector:
                         if k in pl:
                             val = pl[k]
                             rec[k] = f"<{len(val)} bytes>" if isinstance(val, bytes) else str(val)
-                except Exception as exc:
+                except (plistlib.InvalidFileException, ValueError, TypeError, KeyError, OSError) as exc:
                     rec["error"] = str(exc)
                 records.append(rec)
         pinfo["lockdown_records"] = records
         return pinfo
 
-    def collect_ideviceinfo(self) -> Dict[str, Any]:
+    def collect_ideviceinfo(self) -> dict[str, Any]:
         rc, out, _ = run_cmd(["ideviceinfo", "-x"], timeout=8)
         if rc == 0 and out.strip():
             try:
                 return plistlib.loads(out)
-            except Exception:
+            except (plistlib.InvalidFileException, ValueError, TypeError):
                 pass
         # Fallback without -x
-        rc2, out2, _ = run_cmd(["ideviceinfo"], timeout=8)
-        parsed: Dict[str, Any] = {}
+        _rc2, out2, _ = run_cmd(["ideviceinfo"], timeout=8)
+        parsed: dict[str, Any] = {}
         for line in out2.decode("utf-8", errors="replace").splitlines():
             if ":" in line and not line.startswith(" "):
                 k, v = line.split(":", 1)
                 parsed[k.strip()] = v.strip()
         return parsed
 
-    def collect_domains(self) -> Dict[str, Any]:
+    def collect_domains(self) -> dict[str, Any]:
         domains = [
             "com.apple.disk_usage",
             "com.apple.mobile.battery",
@@ -347,14 +336,13 @@ class IOSForensicCollector:
             "com.apple.mobile.chaperone",
             "com.apple.xcode.developerdomain",
         ]
-        res: Dict[str, Any] = {}
+        res: dict[str, Any] = {}
         for dom in domains:
             rc, out, _ = run_cmd(["ideviceinfo", "-q", dom, "-x"], timeout=5)
             if rc == 0 and out.strip():
                 try:
                     pl = plistlib.loads(out)
                     if pl:
-                        # Strip massive binary blobs like NANDInfo for readability, but record size
                         cleaned = {}
                         for k, v in pl.items():
                             if isinstance(v, bytes) and len(v) > 256:
@@ -362,23 +350,23 @@ class IOSForensicCollector:
                             else:
                                 cleaned[k] = v
                         res[dom] = cleaned
-                except Exception:
+                except (plistlib.InvalidFileException, ValueError, TypeError):
                     pass
         return res
 
-    def decode_nvram(self, devinfo: Dict[str, Any]) -> Dict[str, Any]:
+    def decode_nvram(self, devinfo: dict[str, Any]) -> dict[str, Any]:
         nvram = devinfo.get("NonVolatileRAM", {})
-        decoded: Dict[str, Any] = {}
+        decoded: dict[str, Any] = {}
         if not isinstance(nvram, dict):
             return decoded
         for k, v in nvram.items():
-            raw_bytes: Optional[bytes] = None
+            raw_bytes: bytes | None = None
             if isinstance(v, bytes):
                 raw_bytes = v
             elif isinstance(v, str) and v:
                 try:
                     raw_bytes = base64.b64decode(v)
-                except Exception:
+                except (ValueError, TypeError):
                     raw_bytes = v.encode("utf-8", errors="replace")
             if raw_bytes is None:
                 decoded[k] = str(v)
@@ -389,7 +377,7 @@ class IOSForensicCollector:
                     bpl = plistlib.loads(raw_bytes)
                     decoded[k] = f"[Binary Plist] {self._summarize_obj(bpl)}"
                     continue
-                except Exception:
+                except (plistlib.InvalidFileException, ValueError, TypeError):
                     pass
             try:
                 txt = raw_bytes.decode("utf-8")
@@ -397,7 +385,7 @@ class IOSForensicCollector:
                     decoded[k] = txt
                 else:
                     decoded[k] = f"hex:{raw_bytes.hex()}"
-            except Exception:
+            except UnicodeDecodeError:
                 decoded[k] = f"hex:{raw_bytes.hex()}"
         return decoded
 
@@ -413,7 +401,7 @@ class IOSForensicCollector:
             return f"<{len(obj)}B: {obj[:12].hex()}>"
         return obj
 
-    def collect_ioregistry(self) -> Dict[str, Any]:
+    def collect_ioregistry(self) -> dict[str, Any]:
         entries = [
             "AppleSmartBattery",
             "AppleARMPMUCharger",
@@ -428,7 +416,7 @@ class IOSForensicCollector:
             "pearl-sep",
             "sep",
         ]
-        res: Dict[str, Any] = {}
+        res: dict[str, Any] = {}
         for entry in entries:
             rc, out, _ = run_cmd(["idevicediagnostics", "ioregentry", entry], timeout=5)
             if rc == 0 and out.strip():
@@ -436,7 +424,7 @@ class IOSForensicCollector:
                     pl = plistlib.loads(out)
                     ior = pl.get("IORegistry", {})
                     if ior:
-                        cleaned: Dict[str, Any] = {}
+                        cleaned: dict[str, Any] = {}
                         for k, v in ior.items():
                             if isinstance(v, bytes):
                                 try:
@@ -447,7 +435,7 @@ class IOSForensicCollector:
                                         cleaned[k] = int.from_bytes(v, "little")
                                     else:
                                         cleaned[k] = f"<{len(v)}B hex:{v[:20].hex()}>"
-                                except Exception:
+                                except UnicodeDecodeError:
                                     if len(v) == 4:
                                         cleaned[k] = int.from_bytes(v, "little")
                                     else:
@@ -457,22 +445,22 @@ class IOSForensicCollector:
                             else:
                                 cleaned[k] = self._summarize_obj(v)
                         res[entry] = cleaned
-                except Exception:
+                except (plistlib.InvalidFileException, ValueError, TypeError):
                     pass
         return res
 
-    def collect_diagnostics(self) -> Dict[str, Any]:
-        res: Dict[str, Any] = {}
+    def collect_diagnostics(self) -> dict[str, Any]:
+        res: dict[str, Any] = {}
         rc, out, _ = run_cmd(["idevicediagnostics", "diagnostics", "All"], timeout=5)
         if rc == 0 and out.strip():
             try:
                 res["All"] = plistlib.loads(out)
-            except Exception:
+            except (plistlib.InvalidFileException, ValueError, TypeError):
                 pass
         return res
 
-    def collect_afc_forensics(self) -> Dict[str, Any]:
-        afc: Dict[str, Any] = {"directories": {}, "dcim_files": [], "sqlite_summary": {}}
+    def collect_afc_forensics(self) -> dict[str, Any]:
+        afc: dict[str, Any] = {"directories": {}, "dcim_files": [], "sqlite_summary": {}}
         for path in ["/", "/DCIM", "/DCIM/100APPLE", "/Downloads", "/PhotoData", "/Books", "/MediaAnalysis", "/iTunes_Control"]:
             rc, out, _ = run_cmd(["afcclient", "ls", path], timeout=5)
             if rc == 0:
@@ -488,7 +476,7 @@ class IOSForensicCollector:
             for fname in dcim_items[:15]:
                 remote_path = f"/DCIM/100APPLE/{fname}"
                 rc, info_out, _ = run_cmd(["afcclient", "info", remote_path], timeout=5)
-                fmeta: Dict[str, Any] = {"name": fname, "path": remote_path}
+                fmeta: dict[str, Any] = {"name": fname, "path": remote_path}
                 if rc == 0:
                     for line in info_out.decode("utf-8", errors="replace").splitlines():
                         if ":" in line:
@@ -517,7 +505,7 @@ class IOSForensicCollector:
                 local_db = os.path.join(tmpdir, label)
                 rc_db, _, _ = run_cmd(["afcclient", "get", remote_db, local_db], timeout=10)
                 if rc_db == 0 and os.path.exists(local_db) and os.path.getsize(local_db) > 0:
-                    db_info: Dict[str, Any] = {"size_bytes": os.path.getsize(local_db), "tables": {}}
+                    db_info: dict[str, Any] = {"size_bytes": os.path.getsize(local_db), "tables": {}}
                     try:
                         conn = sqlite3.connect(local_db)
                         cur = conn.cursor()
@@ -527,11 +515,12 @@ class IOSForensicCollector:
                         non_empty = {}
                         for t in tables:
                             try:
-                                cur.execute(f'SELECT COUNT(*) FROM "{t}";')
+                                safe_t = t.replace('"', '""')
+                                cur.execute(f'SELECT COUNT(*) FROM "{safe_t}";')
                                 cnt = cur.fetchone()[0]
                                 if cnt > 0:
                                     non_empty[t] = cnt
-                            except Exception:
+                            except sqlite3.Error:
                                 pass
                         db_info["non_empty_tables"] = non_empty
                         if "ZASSET" in non_empty:
@@ -544,23 +533,23 @@ class IOSForensicCollector:
                                 cols = [d[0] for d in cur.description]
                                 rows = []
                                 for r in cur.fetchall():
-                                    row_dict = dict(zip(cols, r))
+                                    row_dict = dict(zip(cols, r, strict=False))
                                     for tk in ("ZDATECREATED", "ZADDEDDATE"):
                                         if isinstance(row_dict.get(tk), (int, float)) and row_dict[tk] > 0:
-                                            dt = datetime.datetime(2001, 1, 1) + datetime.timedelta(seconds=float(row_dict[tk]))
+                                            dt = datetime.datetime(2001, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(seconds=float(row_dict[tk]))
                                             row_dict[tk] = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
                                     rows.append(row_dict)
                                 db_info["zasset_sample"] = rows
-                            except Exception as e:
+                            except sqlite3.Error as e:
                                 db_info["zasset_err"] = str(e)
                         conn.close()
-                    except Exception as exc:
+                    except sqlite3.Error as exc:
                         db_info["error"] = str(exc)
                     afc["sqlite_summary"][remote_db] = db_info
 
         return afc
 
-    def collect_crash_summary(self) -> Dict[str, Any]:
+    def collect_crash_summary(self) -> dict[str, Any]:
         crash_dir = get_default_crash_dir()
         crash_dir.mkdir(parents=True, exist_ok=True)
         files = sorted(crash_dir.rglob("*"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
@@ -575,7 +564,7 @@ class IOSForensicCollector:
                 })
         return {"crash_dir": str(crash_dir), "count": len(file_list), "files": file_list[:50]}
 
-    def export_full_forensic_package(self, base_dir: Optional[str] = None) -> str:
+    def export_full_forensic_package(self, base_dir: str | None = None) -> str:
         if base_dir is None:
             base_dir = get_default_export_base_dir()
         if not self.data:
@@ -611,8 +600,21 @@ class IOSForensicCollector:
             for p in lockdown_src.glob("*.plist"):
                 try:
                     shutil.copy2(p, lockdown_out / p.name)
-                except Exception:
+                except OSError:
                     pass
+
+        # Generate SHA-256 custody manifest for all exported files
+        manifest_path = out_dir / "manifest_sha256.txt"
+        manifest_lines = []
+        for file_path in sorted(out_dir.rglob("*")):
+            if file_path.is_file() and file_path != manifest_path:
+                hasher = hashlib.sha256()
+                with file_path.open("rb") as f:
+                    while chunk := f.read(65536):
+                        hasher.update(chunk)
+                rel_p = file_path.relative_to(out_dir)
+                manifest_lines.append(f"{hasher.hexdigest()}  {rel_p}")
+        manifest_path.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
 
         return str(out_dir)
 
@@ -656,7 +658,7 @@ class IOSForensicTUI(App):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("r", "refresh_data", "Atualizar Dados"),
         Binding("p", "re_pair", "Forçar Pareamento"),
         Binding("e", "export_package", "Exportar Perícia"),
@@ -812,12 +814,12 @@ class IOSForensicTUI(App):
         ecid_raw = dev.get("UniqueChipID", 0)
         try:
             ecid_hex = f"0x{int(ecid_raw):016X}"
-        except Exception:
+        except (ValueError, TypeError):
             ecid_hex = "N/A"
         try:
             ts_val = float(dev.get("TimeIntervalSince1970", 0))
             clock_str = datetime.datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
+        except (ValueError, TypeError, OSError, OverflowError):
             clock_str = "N/A"
 
         rows = [
@@ -975,6 +977,14 @@ class IOSForensicTUI(App):
         health_nom = f"{(nom_cap / design_cap) * 100:.1f}%" if design_cap and nom_cap else "N/A"
         adapter = bat.get("AdapterDetails", {}) if isinstance(bat.get("AdapterDetails"), dict) else {}
 
+        boot_path_val = bat.get("BootPathUpdated")
+        boot_str = "N/A"
+        if isinstance(boot_path_val, (int, float)) and boot_path_val > 0:
+            try:
+                boot_str = datetime.datetime.fromtimestamp(boot_path_val).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, OSError, OverflowError):
+                boot_str = str(boot_path_val)
+
         b_rows = [
             ("Serial da Bateria", str(bat.get("Serial", "N/A")), decode_apple_serial_date(str(bat.get("Serial", "")))),
             ("Contagem de Ciclos (CycleCount)", f"{cycles} ciclos", "Alto desgaste (> 500 ciclos recomendados pela Apple)"),
@@ -985,7 +995,7 @@ class IOSForensicTUI(App):
             ("Corrente Instantânea (Amperage)", f"{bat.get('InstantAmperage')} mA (Carregando: {bat.get('IsCharging')})", "Positivo = carregando pela porta USB"),
             ("Temperatura da Célula", temp_c, f"Desconexões de célula registradas: {bat.get('BatteryCellDisconnectCount', 0)}"),
             ("Fonte de Energia USB (AdapterDetails)", f"{adapter.get('Description', 'usb host')} ({adapter.get('AdapterVoltage', 5000)} mV / {adapter.get('Current', 500)} mA / {adapter.get('Watts', 3)}W)", "Porta USB do Host"),
-            ("Último Boot Registrado no PMU", datetime.datetime.fromtimestamp(bat["BootPathUpdated"]).strftime("%Y-%m-%d %H:%M:%S") if isinstance(bat.get("BootPathUpdated"), int) else "N/A", f"Epoch: {bat.get('BootPathUpdated')}"),
+            ("Último Boot Registrado no PMU", boot_str, f"Epoch: {bat.get('BootPathUpdated')}"),
         ]
         for r in b_rows:
             t.add_row(*r)
@@ -1006,9 +1016,9 @@ class IOSForensicTUI(App):
         disk = d.get("domains", {}).get("com.apple.disk_usage", {})
 
         w.write("[bold cyan]📂 ARMAZENAMENTO NAND & SISTEMA DE ARQUIVOS AFC (APPLE FILE CONDUIT)[/bold cyan]")
-        tot_gb = disk.get("TotalDiskCapacity", 0) / 1e9 if isinstance(disk.get("TotalDiskCapacity"), int) else 0
-        avail_gb = disk.get("AmountDataAvailable", 0) / 1e9 if isinstance(disk.get("AmountDataAvailable"), int) else 0
-        photo_kb = disk.get("PhotoUsage", 0) / 1024 if isinstance(disk.get("PhotoUsage"), int) else 0
+        tot_gb = disk.get("TotalDiskCapacity", 0) / 1e9 if isinstance(disk.get("TotalDiskCapacity"), (int, float)) else 0
+        avail_gb = disk.get("AmountDataAvailable", 0) / 1e9 if isinstance(disk.get("AmountDataAvailable"), (int, float)) else 0
+        photo_kb = disk.get("PhotoUsage", 0) / 1024 if isinstance(disk.get("PhotoUsage"), (int, float)) else 0
         w.write(
             f"• [bold]Capacidade Total NAND:[/bold] {tot_gb:.2f} GB | "
             f"[bold]Disponível:[/bold] {avail_gb:.2f} GB | "
