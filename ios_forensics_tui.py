@@ -1120,7 +1120,7 @@ def print_cli_summary(collector: IOSForensicCollector) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="iOS Forensic & USB Debug TUI")
     parser.add_argument("--cli-export", action="store_true", help="Executa coleta completa, exporta arquivos e exibe resumo no terminal sem abrir a TUI")
-    parser.add_argument("--version", action="version", version="iOS Forensic & Debug TUI Suite v1.0.0")
+    parser.add_argument("--version", action="version", version="iOS Forensic & Debug TUI Suite v1.1.0")
     args = parser.parse_args()
 
     collector = IOSForensicCollector()
